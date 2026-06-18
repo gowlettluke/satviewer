@@ -1,0 +1,509 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Australia Himawari RAMSDIS Live AutoLoop</title>
+<style>
+:root{--panel:rgba(5,8,14,.74);--line:rgba(255,255,255,.16);--text:#f5f7fb;--muted:#aeb8c7;--accent:#7dd3fc;--ok:#86efac;--warn:#fde68a}
+html,body{margin:0;width:100%;height:100%;background:#000;overflow:hidden;font-family:Inter,system-ui,-apple-system,"Segoe UI",Arial,sans-serif;color:var(--text)}
+#app{position:fixed;inset:0;background:#000;overflow:hidden}
+#canvas{position:absolute;inset:0;width:100%;height:100%;background:#000}
+.top{position:absolute;z-index:20;top:14px;left:14px;right:14px;display:flex;justify-content:space-between;gap:12px;pointer-events:none}
+.panel{pointer-events:auto;background:var(--panel);border:1px solid var(--line);box-shadow:0 12px 36px rgba(0,0,0,.35);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);border-radius:14px;padding:11px 13px}
+.title{font-size:15px;font-weight:750;line-height:1.15}
+.sub{margin-top:3px;color:var(--muted);font-size:12px}
+.status{text-align:right;min-width:365px;font-variant-numeric:tabular-nums}
+.status .big{font-size:14px;font-weight:700}
+.status .small{margin-top:3px;color:var(--muted);font-size:12px}
+.liveDot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--ok);box-shadow:0 0 10px rgba(134,239,172,.7);margin-right:6px;vertical-align:1px}
+.controls{position:absolute;z-index:20;left:50%;bottom:16px;transform:translateX(-50%);display:flex;align-items:center;gap:8px;background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:9px;box-shadow:0 12px 36px rgba(0,0,0,.35);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);max-width:calc(100vw - 24px);box-sizing:border-box}
+button,select,input[type=text]{appearance:none;border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.08);color:var(--text);border-radius:11px;padding:8px 10px;font-size:13px;line-height:1;outline:none}
+select option,select optgroup{background:#111827;color:#fff}
+input[type=text]{width:78px}
+button:hover,select:hover,input[type=text]:hover{background:rgba(255,255,255,.14)}
+.primary{background:rgba(125,211,252,.18);border-color:rgba(125,211,252,.38)}
+input[type=range]{width:min(26vw,340px);accent-color:var(--accent)}
+#loader,#error{position:absolute;z-index:30;left:50%;top:50%;transform:translate(-50%,-50%);border-radius:16px;padding:13px 16px;box-shadow:0 20px 60px rgba(0,0,0,.55)}
+#loader{background:rgba(0,0,0,.58);border:1px solid rgba(255,255,255,.14);font-size:13px}
+#error{display:none;max-width:800px;background:rgba(40,10,10,.88);border:1px solid rgba(255,120,120,.36);line-height:1.45}
+.hidden-ui .top,.hidden-ui .controls{opacity:0;transition:opacity .35s ease}
+.top,.controls{opacity:1;transition:opacity .2s ease}
+@media(max-width:1060px){.top{flex-direction:column}.status{text-align:left;min-width:0}.controls{width:calc(100vw - 24px);overflow-x:auto;justify-content:flex-start}input[type=range]{min-width:180px}}
+</style>
+</head>
+<body>
+<div id="app">
+  <canvas id="canvas"></canvas>
+
+  <div class="top">
+    <div class="panel">
+      <div class="title">Australia Himawari-9</div>
+      <div class="sub">NOAA/CIRA RAMSDIS · live auto-updating canvas loop · outlines only</div>
+    </div>
+    <div class="panel status">
+      <div class="big" id="timeLabel">Loading…</div>
+      <div class="small" id="feedLabel">Searching official RAMSDIS images</div>
+    </div>
+  </div>
+
+  <div id="loader">Finding latest frames…</div>
+  <div id="error"></div>
+
+  <div class="controls">
+    <select id="productSel" title="RAMSDIS product">
+      <optgroup label="GEO Bands">
+<option value="vssw">Visible — vssw</option>
+<option value="swir">Shortwave Infrared Window — swir</option>
+<option value="wvap">Water Vapor — wvap</option>
+<option value="irwd" selected>"Clean" Infrared Window — irwd</option>
+<option value="irsv">"Dirty" Infrared Window — irsv</option>
+</optgroup>
+<optgroup label="GEO Multispectral RGB">
+<option value="crgb">Day Cloud Convection — crgb</option>
+<option value="clps">Day Cloud Phase — clps</option>
+<option value="phse">Day Cloud Phase Distinction — phse</option>
+<option value="dlcd">Day Land Cloud / Natural Color — dlcd</option>
+<option value="airm">Airmass — airm</option>
+<option value="swvp">Simple Water Vapor — swvp</option>
+<option value="dwvp">Differential Water Vapor — dwvp</option>
+<option value="tram">Tropical Airmass — tram</option>
+<option value="over">Tropical Overshooting Tops — over</option>
+<option value="dust">Dust — dust</option>
+<option value="mic">Nighttime Microphysics — mic</option>
+<option value="ash">Ash — ash</option>
+<option value="so2">SO₂ — so2</option>
+<option value="firet">Fire Temperature — firet</option>
+</optgroup>
+<optgroup label="LEO Products">
+<option value="pwat">Total Precipitable Water — pwat</option>
+<option value="pwlo">ALPW SFC–850 hPa — pwlo</option>
+<option value="pwlm">ALPW 850–700 hPa — pwlm</option>
+<option value="pwmh">ALPW 700–500 hPa — pwmh</option>
+<option value="pwhi">ALPW 500–300 hPa — pwhi</option>
+</optgroup>
+<option value="custom">Custom product…</option>
+    </select>
+    <input id="customProduct" type="text" placeholder="code" style="display:none" title="Product code">
+    <button id="playBtn" class="primary">Pause</button>
+    <button id="backBtn">‹</button>
+    <button id="nextBtn">›</button>
+    <select id="speedSel">
+      <option value="900">Slow</option>
+      <option value="600" selected>Normal</option>
+      <option value="360">Fast</option>
+      <option value="220">Very fast</option>
+    </select>
+    <select id="hoursSel">
+      <option value="1">1h</option>
+      <option value="3">3h</option>
+      <option value="6" selected>6h</option>
+      <option value="12">12h</option>
+      <option value="24">24h</option>
+    </select>
+    <button id="overlayBtn">Outlines On</button>
+    <button id="refreshBtn">Refresh</button>
+    <button id="fullBtn">Fullscreen</button>
+    <input id="scrub" type="range" min="0" max="0" value="0">
+  </div>
+</div>
+
+<script>
+(() => {
+  const HOST = 'https://ramsdis.cira.colostate.edu';
+  const SECTOR = 'aus';
+  const STEP_MINUTES = 10;
+  const MAX_PROBE_EXTRA_HOURS = 4;
+  const LIVE_CHECK_MS = 60 * 1000;
+  const PRODUCT_LABELS = {"vssw": "Visible", "swir": "Shortwave Infrared Window", "wvap": "Water Vapor", "irwd": "\"Clean\" Infrared Window", "irsv": "\"Dirty\" Infrared Window", "crgb": "Day Cloud Convection", "clps": "Day Cloud Phase", "phse": "Day Cloud Phase Distinction", "dlcd": "Day Land Cloud / Natural Color", "airm": "Airmass", "swvp": "Simple Water Vapor", "dwvp": "Differential Water Vapor", "tram": "Tropical Airmass", "over": "Tropical Overshooting Tops", "dust": "Dust", "mic": "Nighttime Microphysics", "ash": "Ash", "so2": "SO₂", "firet": "Fire Temperature", "pwat": "Total Precipitable Water", "pwlo": "ALPW SFC–850 hPa", "pwlm": "ALPW 850–700 hPa", "pwmh": "ALPW 700–500 hPa", "pwhi": "ALPW 500–300 hPa"};
+
+  const canvas = document.getElementById('canvas');
+  const ctx = canvas.getContext('2d', { alpha: false });
+  const loader = document.getElementById('loader');
+  const errorBox = document.getElementById('error');
+  const timeLabel = document.getElementById('timeLabel');
+  const feedLabel = document.getElementById('feedLabel');
+  const scrub = document.getElementById('scrub');
+  const app = document.getElementById('app');
+  const productSel = document.getElementById('productSel');
+  const customProduct = document.getElementById('customProduct');
+
+  let frames = [];
+  let idx = 0;
+  let playing = true;
+  let overlays = true;
+  let playMs = Number(document.getElementById('speedSel').value);
+  let timer = null;
+  let liveTimer = null;
+  let uiHideTimer = null;
+  let imageCache = new Map();
+  let overlayImages = { geo: null, grid: null };
+  let dpr = 1;
+  let scanInProgress = false;
+  let lastLiveCheck = null;
+  let latestKnownStamp = '';
+  let lastProduct = '';
+
+  function pad(n){ return String(n).padStart(2,'0'); }
+  function cleanProductCode(v){ return String(v || '').trim().toLowerCase().replace(/[^a-z0-9_]/g, ''); }
+  function currentProduct(){ return productSel.value === 'custom' ? cleanProductCode(customProduct.value) : productSel.value; }
+  function currentProductLabel(){ const p = currentProduct(); return PRODUCT_LABELS[p] || `RAMSDIS product ${p}`; }
+  function floorTo10(d){ const x = new Date(d); x.setUTCSeconds(0,0); x.setUTCMinutes(Math.floor(x.getUTCMinutes()/10)*10); return x; }
+  function addMinutes(d, mins){ return new Date(d.getTime() + mins * 60000); }
+  function dateFromStamp(s){
+    return new Date(Date.UTC(
+      Number(s.slice(0,4)), Number(s.slice(4,6)) - 1, Number(s.slice(6,8)),
+      Number(s.slice(8,10)), Number(s.slice(10,12)), Number(s.slice(12,14))
+    ));
+  }
+  function stamp(d){ return `${d.getUTCFullYear()}${pad(d.getUTCMonth()+1)}${pad(d.getUTCDate())}${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}00`; }
+  function label(d){ return `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:00 UTC ${pad(d.getUTCDate())} ${d.toLocaleString('en-GB',{month:'short',timeZone:'UTC'})} ${d.getUTCFullYear()}`; }
+
+  function maxFramesForWindow(){
+    const hours = Number(document.getElementById('hoursSel').value);
+    return Math.ceil((hours * 60) / STEP_MINUTES);
+  }
+
+  function urlsForDate(d, product){
+    const yyyy = d.getUTCFullYear();
+    const mm = pad(d.getUTCMonth()+1);
+    const dd = pad(d.getUTCDate());
+    const hh = pad(d.getUTCHours());
+    const s = stamp(d);
+    const rel = `${yyyy}/${mm}${dd}/${hh}/area/${SECTOR}/${product}/area_${SECTOR}_${product}_${s}.webp`;
+    return [
+      `${HOST}/ramsdis/static/products/${rel}`,
+      `${HOST}/tropical_ramsdis/static/products/${rel}`
+    ];
+  }
+
+  function loadImage(url, bust=false){
+    const key = bust ? url + '?_=' + Date.now() : url;
+    if (imageCache.has(key)) return imageCache.get(key);
+    const p = new Promise(resolve => {
+      const img = new Image();
+      img.decoding = 'async';
+      img.onload = async () => {
+        try { if (img.decode) await img.decode(); } catch {}
+        resolve(img);
+      };
+      img.onerror = () => resolve(null);
+      img.src = key;
+    });
+    imageCache.set(key, p);
+    return p;
+  }
+
+  async function loadCandidate(urls, frameLabel, frameStamp, bust=false){
+    for (const url of urls) {
+      const img = await loadImage(url, bust);
+      if (img) return {url, label: frameLabel, stamp: frameStamp};
+    }
+    return null;
+  }
+
+  async function loadOverlays(){
+    const geo = await loadImage(`${HOST}/tropical_ramsdis/static/products/overlays/area_aus_geopolit.webp`);
+    overlayImages.geo = geo;
+    overlayImages.grid = null; // lat/lon grid deliberately disabled
+  }
+
+  function resizeCanvas(){
+    dpr = Math.max(1, Math.min(window.devicePixelRatio || 1, 2));
+    const w = Math.floor(window.innerWidth * dpr);
+    const h = Math.floor(window.innerHeight * dpr);
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+      canvas.style.width = window.innerWidth + 'px';
+      canvas.style.height = window.innerHeight + 'px';
+      draw();
+    }
+  }
+
+  function drawContain(img){
+    if (!img) return;
+    const cw = canvas.width, ch = canvas.height;
+    const iw = img.naturalWidth || img.width;
+    const ih = img.naturalHeight || img.height;
+    if (!iw || !ih) return;
+
+    const scale = Math.min(cw / iw, ch / ih);
+    const dw = Math.round(iw * scale);
+    const dh = Math.round(ih * scale);
+    const dx = Math.round((cw - dw) / 2);
+    const dy = Math.round((ch - dh) / 2);
+    ctx.drawImage(img, dx, dy, dw, dh);
+  }
+
+  async function draw(){
+    resizeCanvas();
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0,0,canvas.width,canvas.height);
+
+    if (!frames.length) return;
+
+    const f = frames[idx];
+    const img = await loadImage(f.url);
+    if (!img) return;
+
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = 'source-over';
+    drawContain(img);
+
+    if (overlays) {
+      ctx.globalAlpha = 0.72;
+      ctx.globalCompositeOperation = 'screen';
+      drawContain(overlayImages.geo);
+      ctx.globalAlpha = 1;
+      ctx.globalCompositeOperation = 'source-over';
+    }
+  }
+
+  function preloadAround(center){
+    if (!frames.length) return;
+    for (let offset=1; offset<=8; offset++){
+      const f = frames[(center + offset) % frames.length];
+      if (f) loadImage(f.url);
+    }
+  }
+
+  function trimToWindow(){
+    const max = maxFramesForWindow();
+    if (frames.length <= max) return;
+    const currentStamp = frames[idx]?.stamp;
+    frames = frames.slice(frames.length - max);
+    const newIdx = frames.findIndex(f => f.stamp === currentStamp);
+    idx = newIdx >= 0 ? newIdx : Math.min(idx, frames.length - 1);
+  }
+
+  async function initialScan(){
+    const product = currentProduct();
+    if (!product) {
+      errorBox.style.display = 'block';
+      errorBox.textContent = 'Enter a RAMSDIS product code first.';
+      return;
+    }
+
+    scanInProgress = true;
+    loader.style.display = 'block';
+    loader.textContent = `Finding ${currentProductLabel()} frames…`;
+    errorBox.style.display = 'none';
+
+    const requiredSlots = maxFramesForWindow();
+    const maxSlots = requiredSlots + Math.ceil((MAX_PROBE_EXTRA_HOURS * 60) / STEP_MINUTES);
+    const now = floorTo10(new Date());
+    const tasks = [];
+
+    for (let i=0; i<maxSlots; i++) {
+      const d = new Date(now.getTime() - i * STEP_MINUTES * 60000);
+      tasks.push(loadCandidate(urlsForDate(d, product), label(d), stamp(d), true));
+    }
+
+    const results = await Promise.all(tasks);
+    let found = results.filter(Boolean);
+    found.sort((a,b) => a.stamp.localeCompare(b.stamp));
+    if (found.length > requiredSlots) found = found.slice(found.length - requiredSlots);
+
+    if (!found.length) {
+      loader.style.display = 'none';
+      errorBox.style.display = 'block';
+      errorBox.textContent =
+        `No frames loaded for "${currentProductLabel()}" (${product}). This product may update less often, be temporarily unavailable, or use a different naming pattern.`;
+      frames = [];
+      latestKnownStamp = '';
+      updateLabels();
+      draw();
+      scanInProgress = false;
+      return;
+    }
+
+    frames = found;
+    idx = frames.length - 1;
+    latestKnownStamp = frames[frames.length - 1].stamp;
+    lastProduct = product;
+
+    loader.textContent = 'Preloading current frame…';
+    await loadImage(frames[idx].url);
+    preloadAround(idx);
+
+    loader.style.display = 'none';
+    updateLabels();
+    draw();
+    saveUrlProduct();
+
+    scanInProgress = false;
+  }
+
+  async function liveCheck(){
+    if (scanInProgress || !frames.length) return;
+
+    const product = currentProduct();
+    if (product !== lastProduct) return initialScan();
+
+    lastLiveCheck = new Date();
+
+    const newestDate = dateFromStamp(latestKnownStamp || frames[frames.length - 1].stamp);
+    const now = floorTo10(new Date());
+
+    // Check sequentially from the next expected frame up to current rounded time.
+    // This avoids rebuilding the whole loop while still catching late frames.
+    const candidates = [];
+    for (let d = addMinutes(newestDate, STEP_MINUTES); d <= now; d = addMinutes(d, STEP_MINUTES)) {
+      candidates.push(new Date(d));
+    }
+
+    // Also re-check the current rounded timestamp in case the last expected frame was not available yet.
+    if (!candidates.length) candidates.push(now);
+
+    let added = 0;
+
+    for (const d of candidates) {
+      const s = stamp(d);
+      if (frames.some(f => f.stamp === s)) continue;
+
+      const f = await loadCandidate(urlsForDate(d, product), label(d), s, true);
+      if (f) {
+        frames.push(f);
+        frames.sort((a,b) => a.stamp.localeCompare(b.stamp));
+        latestKnownStamp = frames[frames.length - 1].stamp;
+        added++;
+      }
+    }
+
+    if (added) {
+      const wasAtLatest = idx >= frames.length - added - 1;
+      trimToWindow();
+      if (wasAtLatest) idx = frames.length - 1;
+      preloadAround(idx);
+      updateLabels();
+      draw();
+    } else {
+      updateLabels();
+    }
+  }
+
+  function saveUrlProduct(){
+    const u = new URL(location.href);
+    u.searchParams.set('product', currentProduct());
+    history.replaceState(null, '', u);
+  }
+
+  function updateLabels(){
+    const product = currentProduct();
+    const productLabel = currentProductLabel();
+    const liveText = lastLiveCheck ? ` · checked ${lastLiveCheck.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}` : '';
+
+    if (!frames.length) {
+      timeLabel.textContent = 'No frames';
+      feedLabel.innerHTML = `${productLabel} · ${product || 'no product'} · 0 frames`;
+      scrub.max = '0';
+      scrub.value = '0';
+      return;
+    }
+    const f = frames[idx];
+    timeLabel.textContent = f.label;
+    feedLabel.innerHTML = `<span class="liveDot"></span>${productLabel} · ${product} · ${frames.length} frames · ${idx+1}/${frames.length}${liveText}`;
+    scrub.max = String(frames.length - 1);
+    scrub.value = String(idx);
+  }
+
+  function showFrame(i){
+    if (!frames.length) return;
+    idx = ((i % frames.length) + frames.length) % frames.length;
+    updateLabels();
+    draw();
+    preloadAround(idx);
+  }
+
+  function step(){
+    if (!playing || !frames.length) return;
+    showFrame(idx + 1);
+  }
+
+  function restartTimer(){
+    if (timer) clearInterval(timer);
+    timer = setInterval(step, playMs);
+  }
+
+  function restartLiveTimer(){
+    if (liveTimer) clearInterval(liveTimer);
+    liveTimer = setInterval(liveCheck, LIVE_CHECK_MS);
+  }
+
+  function setPlaying(v){
+    playing = v;
+    document.getElementById('playBtn').textContent = playing ? 'Pause' : 'Play';
+  }
+
+  function setOverlays(v){
+    overlays = v;
+    document.getElementById('overlayBtn').textContent = overlays ? 'Outlines On' : 'Outlines Off';
+    draw();
+  }
+
+  function wakeUi(){
+    app.classList.remove('hidden-ui');
+    if (uiHideTimer) clearTimeout(uiHideTimer);
+    uiHideTimer = setTimeout(() => app.classList.add('hidden-ui'), 6000);
+  }
+
+  function initProductFromUrl(){
+    const p = cleanProductCode(new URL(location.href).searchParams.get('product'));
+    if (!p) return;
+    const existing = [...productSel.options].find(o => o.value === p);
+    if (existing) productSel.value = p;
+    else { productSel.value = 'custom'; customProduct.style.display = ''; customProduct.value = p; }
+  }
+
+  function resetAndScan(){
+    imageCache = new Map();
+    frames = [];
+    idx = 0;
+    latestKnownStamp = '';
+    lastLiveCheck = null;
+    loadOverlays().then(initialScan);
+  }
+
+  productSel.onchange = () => { customProduct.style.display = productSel.value === 'custom' ? '' : 'none'; resetAndScan(); };
+  customProduct.onchange = resetAndScan;
+  customProduct.onkeydown = e => { if (e.key === 'Enter') resetAndScan(); };
+
+  document.getElementById('playBtn').onclick = () => setPlaying(!playing);
+  document.getElementById('backBtn').onclick = () => { setPlaying(false); showFrame(idx - 1); };
+  document.getElementById('nextBtn').onclick = () => { setPlaying(false); showFrame(idx + 1); };
+  document.getElementById('speedSel').onchange = e => { playMs = Number(e.target.value); restartTimer(); };
+  document.getElementById('hoursSel').onchange = resetAndScan;
+  document.getElementById('overlayBtn').onclick = () => setOverlays(!overlays);
+  document.getElementById('refreshBtn').onclick = liveCheck;
+  document.getElementById('fullBtn').onclick = () => document.documentElement.requestFullscreen?.();
+  scrub.oninput = e => { setPlaying(false); showFrame(Number(e.target.value)); };
+
+  document.addEventListener('keydown', e => {
+    const k = e.key.toLowerCase();
+    if (k === ' ') { e.preventDefault(); setPlaying(!playing); }
+    if (k === 'arrowleft') { setPlaying(false); showFrame(idx-1); }
+    if (k === 'arrowright') { setPlaying(false); showFrame(idx+1); }
+    if (k === 'f') document.documentElement.requestFullscreen?.();
+    if (k === 'o') setOverlays(!overlays);
+    if (k === 'r') liveCheck();
+    wakeUi();
+  });
+
+  window.addEventListener('resize', () => { resizeCanvas(); draw(); });
+  document.addEventListener('mousemove', wakeUi);
+  document.addEventListener('touchstart', wakeUi, {passive:true});
+
+  initProductFromUrl();
+  setOverlays(true);
+  restartTimer();
+  restartLiveTimer();
+  wakeUi();
+  resizeCanvas();
+
+  loadOverlays().then(initialScan);
+})();
+</script>
+</body>
+</html>
