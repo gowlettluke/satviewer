@@ -2,14 +2,15 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="Satellite Viewer" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Australia Himawari RAMSDIS Live AutoLoop</title>
 <link rel="icon" href="favicon.ico" type="image/x-icon">
 <style>
 :root{--panel:rgba(5,8,14,.74);--line:rgba(255,255,255,.16);--text:#f5f7fb;--muted:#aeb8c7;--accent:#7dd3fc;--ok:#86efac;--warn:#fde68a}
 html,body{margin:0;width:100%;height:100%;background:#000;overflow:hidden;font-family:Inter,system-ui,-apple-system,"Segoe UI",Arial,sans-serif;color:var(--text)}
 #app{position:fixed;inset:0;background:#000;overflow:hidden}
-#canvas{position:absolute;inset:0;width:100%;height:100%;background:#000}
+#canvas{position:absolute;inset:0;width:100%;height:100%;background:#000;cursor:grab;touch-action:none}
+#canvas.dragging{cursor:grabbing}
 .top{position:absolute;z-index:20;top:14px;left:14px;right:14px;display:flex;justify-content:space-between;gap:12px;pointer-events:none}
 .panel{pointer-events:auto;background:var(--panel);border:1px solid var(--line);box-shadow:0 12px 36px rgba(0,0,0,.35);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);border-radius:14px;padding:11px 13px}
 .title{font-size:15px;font-weight:750;line-height:1.15}
@@ -102,6 +103,9 @@ input[type=range]{width:min(26vw,340px);accent-color:var(--accent)}
       <option value="12">12h</option>
       <option value="24">24h</option>
     </select>
+    <button id="zoomOutBtn">−</button>
+    <button id="zoomResetBtn">Reset View</button>
+    <button id="zoomInBtn">+</button>
     <button id="overlayBtn">Outlines On</button>
     <button id="refreshBtn">Refresh</button>
     <button id="fullBtn">Fullscreen</button>
@@ -140,6 +144,14 @@ input[type=range]{width:min(26vw,340px);accent-color:var(--accent)}
   let imageCache = new Map();
   let overlayImages = { geo: null, grid: null };
   let dpr = 1;
+  let viewScale = 1;
+  let viewX = 0;
+  let viewY = 0;
+  let isDragging = false;
+  let dragStartX = 0;
+  let dragStartY = 0;
+  let dragViewX = 0;
+  let dragViewY = 0;
   let scanInProgress = false;
   let lastLiveCheck = null;
   let latestKnownStamp = '';
@@ -227,19 +239,65 @@ input[type=range]{width:min(26vw,340px);accent-color:var(--accent)}
     }
   }
 
-  function drawContain(img){
-    if (!img) return;
+  function getBaseImageRect(img){
     const cw = canvas.width, ch = canvas.height;
     const iw = img.naturalWidth || img.width;
     const ih = img.naturalHeight || img.height;
-    if (!iw || !ih) return;
+    if (!iw || !ih) return null;
 
-    const scale = Math.min(cw / iw, ch / ih);
-    const dw = Math.round(iw * scale);
-    const dh = Math.round(ih * scale);
-    const dx = Math.round((cw - dw) / 2);
-    const dy = Math.round((ch - dh) / 2);
-    ctx.drawImage(img, dx, dy, dw, dh);
+    const baseScale = Math.min(cw / iw, ch / ih);
+    const dw = iw * baseScale * viewScale;
+    const dh = ih * baseScale * viewScale;
+    const dx = (cw - dw) / 2 + viewX;
+    const dy = (ch - dh) / 2 + viewY;
+    return {dx, dy, dw, dh};
+  }
+
+  function drawContain(img){
+    if (!img) return;
+    const r = getBaseImageRect(img);
+    if (!r) return;
+    ctx.drawImage(img, Math.round(r.dx), Math.round(r.dy), Math.round(r.dw), Math.round(r.dh));
+  }
+
+  function clampView(){
+    // Keep the image broadly reachable without making panning feel restrictive.
+    const limitX = canvas.width * Math.max(viewScale, 1.5);
+    const limitY = canvas.height * Math.max(viewScale, 1.5);
+    viewX = Math.max(-limitX, Math.min(limitX, viewX));
+    viewY = Math.max(-limitY, Math.min(limitY, viewY));
+  }
+
+  function zoomAt(clientX, clientY, factor){
+    const oldScale = viewScale;
+    const newScale = Math.max(1, Math.min(8, oldScale * factor));
+    if (newScale === oldScale) return;
+
+    const rect = canvas.getBoundingClientRect();
+    const px = (clientX - rect.left) * dpr;
+    const py = (clientY - rect.top) * dpr;
+
+    // Keep the point under the mouse fixed while zooming.
+    viewX = px - (px - viewX - canvas.width / 2) * (newScale / oldScale) - canvas.width / 2;
+    viewY = py - (py - viewY - canvas.height / 2) * (newScale / oldScale) - canvas.height / 2;
+
+    viewScale = newScale;
+    clampView();
+    draw();
+    updateZoomButtonLabel();
+  }
+
+  function resetView(){
+    viewScale = 1;
+    viewX = 0;
+    viewY = 0;
+    draw();
+    updateZoomButtonLabel();
+  }
+
+  function updateZoomButtonLabel(){
+    const b = document.getElementById('zoomResetBtn');
+    if (b) b.textContent = viewScale === 1 ? 'Reset View' : `${Math.round(viewScale * 100)}%`;
   }
 
   async function draw(){
@@ -481,6 +539,9 @@ input[type=range]{width:min(26vw,340px);accent-color:var(--accent)}
   document.getElementById('nextBtn').onclick = () => { setPlaying(false); showFrame(idx + 1); };
   document.getElementById('speedSel').onchange = e => { playMs = Number(e.target.value); restartTimer(); };
   document.getElementById('hoursSel').onchange = resetAndScan;
+  document.getElementById('zoomOutBtn').onclick = () => zoomAt(window.innerWidth / 2, window.innerHeight / 2, 1 / 1.25);
+  document.getElementById('zoomInBtn').onclick = () => zoomAt(window.innerWidth / 2, window.innerHeight / 2, 1.25);
+  document.getElementById('zoomResetBtn').onclick = resetView;
   document.getElementById('overlayBtn').onclick = () => setOverlays(!overlays);
   document.getElementById('refreshBtn').onclick = liveCheck;
   document.getElementById('fullBtn').onclick = () => document.documentElement.requestFullscreen?.();
@@ -494,6 +555,52 @@ input[type=range]{width:min(26vw,340px);accent-color:var(--accent)}
     if (k === 'f') document.documentElement.requestFullscreen?.();
     if (k === 'o') setOverlays(!overlays);
     if (k === 'r') liveCheck();
+    if (k === '+' || k === '=') zoomAt(window.innerWidth / 2, window.innerHeight / 2, 1.25);
+    if (k === '-' || k === '_') zoomAt(window.innerWidth / 2, window.innerHeight / 2, 1 / 1.25);
+    if (k === '0') resetView();
+    wakeUi();
+  });
+
+  canvas.addEventListener('wheel', e => {
+    e.preventDefault();
+    const factor = e.deltaY < 0 ? 1.18 : 1 / 1.18;
+    zoomAt(e.clientX, e.clientY, factor);
+    wakeUi();
+  }, {passive:false});
+
+  canvas.addEventListener('pointerdown', e => {
+    isDragging = true;
+    canvas.classList.add('dragging');
+    canvas.setPointerCapture?.(e.pointerId);
+    dragStartX = e.clientX;
+    dragStartY = e.clientY;
+    dragViewX = viewX;
+    dragViewY = viewY;
+    wakeUi();
+  });
+
+  canvas.addEventListener('pointermove', e => {
+    if (!isDragging) return;
+    viewX = dragViewX + (e.clientX - dragStartX) * dpr;
+    viewY = dragViewY + (e.clientY - dragStartY) * dpr;
+    clampView();
+    draw();
+  });
+
+  canvas.addEventListener('pointerup', e => {
+    isDragging = false;
+    canvas.classList.remove('dragging');
+    canvas.releasePointerCapture?.(e.pointerId);
+  });
+
+  canvas.addEventListener('pointercancel', () => {
+    isDragging = false;
+    canvas.classList.remove('dragging');
+  });
+
+  canvas.addEventListener('dblclick', e => {
+    e.preventDefault();
+    resetView();
     wakeUi();
   });
 
@@ -507,6 +614,7 @@ input[type=range]{width:min(26vw,340px);accent-color:var(--accent)}
   restartLiveTimer();
   wakeUi();
   resizeCanvas();
+  updateZoomButtonLabel();
 
   loadOverlays().then(initialScan);
 })();
