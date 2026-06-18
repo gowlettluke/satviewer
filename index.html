@@ -2,8 +2,9 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="Satellite Viewer" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Australia Himawari RAMSDIS Live AutoLoop</title>
+<link rel="icon" href="favicon.ico" type="image/x-icon">
 <style>
 :root{--panel:rgba(5,8,14,.74);--line:rgba(255,255,255,.16);--text:#f5f7fb;--muted:#aeb8c7;--accent:#7dd3fc;--ok:#86efac;--warn:#fde68a}
 html,body{margin:0;width:100%;height:100%;background:#000;overflow:hidden;font-family:Inter,system-ui,-apple-system,"Segoe UI",Arial,sans-serif;color:var(--text)}
@@ -27,7 +28,7 @@ input[type=range]{width:min(26vw,340px);accent-color:var(--accent)}
 #loader,#error{position:absolute;z-index:30;left:50%;top:50%;transform:translate(-50%,-50%);border-radius:16px;padding:13px 16px;box-shadow:0 20px 60px rgba(0,0,0,.55)}
 #loader{background:rgba(0,0,0,.58);border:1px solid rgba(255,255,255,.14);font-size:13px}
 #error{display:none;max-width:800px;background:rgba(40,10,10,.88);border:1px solid rgba(255,120,120,.36);line-height:1.45}
-.hidden-ui .top,.hidden-ui .controls{opacity:0;transition:opacity .35s ease}
+.hidden-ui .top,.hidden-ui .controls{opacity:1;transition:opacity .2s ease}
 .top,.controls{opacity:1;transition:opacity .2s ease}
 @media(max-width:1060px){.top{flex-direction:column}.status{text-align:left;min-width:0}.controls{width:calc(100vw - 24px);overflow-x:auto;justify-content:flex-start}input[type=range]{min-width:180px}}
 </style>
@@ -158,6 +159,11 @@ input[type=range]{width:min(26vw,340px);accent-color:var(--accent)}
   }
   function stamp(d){ return `${d.getUTCFullYear()}${pad(d.getUTCMonth()+1)}${pad(d.getUTCDate())}${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}00`; }
   function label(d){ return `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:00 UTC ${pad(d.getUTCDate())} ${d.toLocaleString('en-GB',{month:'short',timeZone:'UTC'})} ${d.getUTCFullYear()}`; }
+  function labelAESTFromStamp(s){
+    const d = dateFromStamp(s);
+    const aest = new Date(d.getTime() + 10 * 60 * 60000);
+    return `${pad(aest.getUTCHours())}:${pad(aest.getUTCMinutes())}:00 AEST ${pad(aest.getUTCDate())} ${aest.toLocaleString('en-GB',{month:'short',timeZone:'UTC'})} ${aest.getUTCFullYear()}`;
+  }
 
   function maxFramesForWindow(){
     const hours = Number(document.getElementById('hoursSel').value);
@@ -403,7 +409,7 @@ input[type=range]{width:min(26vw,340px);accent-color:var(--accent)}
       return;
     }
     const f = frames[idx];
-    timeLabel.textContent = f.label;
+    timeLabel.innerHTML = `${f.label}<br><span style="color:var(--muted);font-weight:600">${labelAESTFromStamp(f.stamp)}</span>`;
     feedLabel.innerHTML = `<span class="liveDot"></span>${productLabel} · ${product} · ${frames.length} frames · ${idx+1}/${frames.length}${liveText}`;
     scrub.max = String(frames.length - 1);
     scrub.value = String(idx);
@@ -446,7 +452,7 @@ input[type=range]{width:min(26vw,340px);accent-color:var(--accent)}
   function wakeUi(){
     app.classList.remove('hidden-ui');
     if (uiHideTimer) clearTimeout(uiHideTimer);
-    uiHideTimer = setTimeout(() => app.classList.add('hidden-ui'), 6000);
+    uiHideTimer = null;
   }
 
   function initProductFromUrl(){
