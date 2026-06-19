@@ -27,7 +27,10 @@ button:hover,select:hover,input[type=text]:hover{background:rgba(255,255,255,.14
 .primary{background:rgba(125,211,252,.18);border-color:rgba(125,211,252,.38)}
 input[type=range]{width:min(26vw,340px);accent-color:var(--accent)}
 #loader,#error{position:absolute;z-index:30;left:50%;top:50%;transform:translate(-50%,-50%);border-radius:16px;padding:13px 16px;box-shadow:0 20px 60px rgba(0,0,0,.55)}
-#loader{background:rgba(0,0,0,.58);border:1px solid rgba(255,255,255,.14);font-size:13px}
+#loader{background:rgba(0,0,0,.72);border:1px solid rgba(255,255,255,.18);font-size:13px;min-width:320px;text-align:center}
+#loader .bar{height:7px;background:rgba(255,255,255,.12);border-radius:999px;overflow:hidden;margin-top:9px}
+#loader .fill{height:100%;width:0%;background:var(--accent);transition:width .15s linear}
+#loader .hint{margin-top:7px;color:var(--muted);font-size:12px}
 #error{display:none;max-width:800px;background:rgba(40,10,10,.88);border:1px solid rgba(255,120,120,.36);line-height:1.45}
 .hidden-ui .top,.hidden-ui .controls{opacity:1;transition:opacity .2s ease}
 .top,.controls{opacity:1;transition:opacity .2s ease}
@@ -342,6 +345,14 @@ input[type=range]{width:min(26vw,340px);accent-color:var(--accent)}
     idx = newIdx >= 0 ? newIdx : Math.min(idx, frames.length - 1);
   }
 
+  function setLoaderProgress(title, checked, total, loaded){
+    const pct = total ? Math.round((checked / total) * 100) : 0;
+    loader.innerHTML =
+      `<div>${title}</div>` +
+      `<div class="bar"><div class="fill" style="width:${pct}%"></div></div>` +
+      `<div class="hint">Checked ${checked}/${total} · Loaded ${loaded} frame${loaded === 1 ? '' : 's'}</div>`;
+  }
+
   async function initialScan(){
     const product = currentProduct();
     if (!product) {
@@ -352,21 +363,56 @@ input[type=range]{width:min(26vw,340px);accent-color:var(--accent)}
 
     scanInProgress = true;
     loader.style.display = 'block';
-    loader.textContent = `Finding ${currentProductLabel()} frames…`;
     errorBox.style.display = 'none';
 
     const requiredSlots = maxFramesForWindow();
     const maxSlots = requiredSlots + Math.ceil((MAX_PROBE_EXTRA_HOURS * 60) / STEP_MINUTES);
     const now = floorTo10(new Date());
-    const tasks = [];
 
+    let checked = 0;
+    let loaded = 0;
+    let found = [];
+    let firstDrawn = false;
+
+    setLoaderProgress(`Finding ${currentProductLabel()} frames…`, checked, maxSlots, loaded);
+
+    const probes = [];
     for (let i=0; i<maxSlots; i++) {
       const d = new Date(now.getTime() - i * STEP_MINUTES * 60000);
-      tasks.push(loadCandidate(urlsForDate(d, product), label(d), stamp(d), true));
+      probes.push({ d, urls: urlsForDate(d, product), label: label(d), stamp: stamp(d) });
     }
 
-    const results = await Promise.all(tasks);
-    let found = results.filter(Boolean);
+    const concurrency = 8;
+    let cursor = 0;
+
+    async function worker(){
+      while (cursor < probes.length) {
+        const p = probes[cursor++];
+        const f = await loadCandidate(p.urls, p.label, p.stamp, true);
+        checked++;
+
+        if (f) {
+          found.push(f);
+          loaded++;
+
+          if (!firstDrawn) {
+            found.sort((a,b) => a.stamp.localeCompare(b.stamp));
+            frames = found.slice();
+            idx = frames.length - 1;
+            latestKnownStamp = frames[idx].stamp;
+            lastProduct = product;
+            updateLabels();
+            draw();
+            firstDrawn = true;
+          }
+        }
+
+        setLoaderProgress(`Loading ${currentProductLabel()} loop…`, checked, maxSlots, loaded);
+      }
+    }
+
+    await Promise.all(Array.from({length: concurrency}, worker));
+
     found.sort((a,b) => a.stamp.localeCompare(b.stamp));
     if (found.length > requiredSlots) found = found.slice(found.length - requiredSlots);
 
@@ -388,7 +434,7 @@ input[type=range]{width:min(26vw,340px);accent-color:var(--accent)}
     latestKnownStamp = frames[frames.length - 1].stamp;
     lastProduct = product;
 
-    loader.textContent = 'Preloading current frame…';
+    setLoaderProgress('Preparing smooth playback…', maxSlots, maxSlots, frames.length);
     await loadImage(frames[idx].url);
     preloadAround(idx);
 
