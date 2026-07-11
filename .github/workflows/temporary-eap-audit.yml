@@ -18,8 +18,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: python -m pip install curl-cffi
-      - run: python tools/eap_extract.py
+      - run: python -m pip install playwright pypdf
+      - run: python -m playwright install --with-deps chromium
+      - run: xvfb-run -a python tools/fairbairn_fetch.py
         continue-on-error: true
       - if: always()
         uses: actions/upload-artifact@v4
@@ -27,4 +28,3 @@ jobs:
           name: fairbairn-probe
           path: fairbairn_probe
           if-no-files-found: warn
-# fairbairn probe trigger
