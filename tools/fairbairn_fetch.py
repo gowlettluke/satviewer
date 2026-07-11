@@ -29,45 +29,33 @@ def main() -> None:
         except Exception as exc:
             result["index_error"] = repr(exc)
 
-        captured: list[dict] = []
-
-        def on_response(response):
-            if "fairbairn-eap.pdf" not in response.url.lower():
-                return
-            rec = {
-                "url": response.url,
-                "status": response.status,
-                "content_type": response.headers.get("content-type"),
-            }
-            try:
-                body = response.body()
-                rec["bytes"] = len(body)
-                rec["prefix"] = body[:80].decode("utf-8", "replace")
-                if body.lstrip().startswith(b"%PDF"):
-                    (OUT / "fairbairn-eap.pdf").write_bytes(body)
-                    rec["saved_pdf"] = True
-            except Exception as exc:
-                rec["body_error"] = repr(exc)
-            captured.append(rec)
-
-        page.on("response", on_response)
-
-        for attempt in range(1, 4):
+        for attempt in range(1, 5):
             rec = {"attempt": attempt}
             try:
-                response = page.goto(URL, wait_until="domcontentloaded", timeout=120_000)
-                rec["goto_status"] = response.status if response else None
-                rec["final_url"] = page.url
-                page.wait_for_timeout(15_000)
-                rec["title"] = page.title()
-                rec["html_prefix"] = page.content()[:500]
-                page.screenshot(path=str(OUT / f"attempt-{attempt}.png"), full_page=True)
-                if (OUT / "fairbairn-eap.pdf").exists():
+                with page.expect_download(timeout=150_000) as download_info:
+                    page.goto(URL, wait_until="commit", timeout=150_000)
+                download = download_info.value
+                target = OUT / "fairbairn-eap.pdf"
+                download.save_as(str(target))
+                body = target.read_bytes()
+                rec.update({
+                    "suggested_filename": download.suggested_filename,
+                    "bytes": len(body),
+                    "prefix": body[:20].decode("latin-1", "replace"),
+                })
+                if body.lstrip().startswith(b"%PDF"):
                     result["status"] = "pdf_saved"
                     result["attempts"].append(rec)
                     break
+                rec["error"] = "Downloaded file is not a PDF"
             except Exception as exc:
                 rec["error"] = repr(exc)
+                try:
+                    rec["final_url"] = page.url
+                    rec["title"] = page.title()
+                    page.screenshot(path=str(OUT / f"attempt-{attempt}.png"), full_page=True)
+                except Exception:
+                    pass
             result["attempts"].append(rec)
             try:
                 page.goto(INDEX, wait_until="domcontentloaded", timeout=120_000)
@@ -75,7 +63,6 @@ def main() -> None:
             except Exception:
                 pass
 
-        result["captured_responses"] = captured
         if "status" not in result:
             result["status"] = "not_saved"
         browser.close()
