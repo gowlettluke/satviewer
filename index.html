@@ -99,6 +99,7 @@ input[type=range]{width:min(26vw,340px);accent-color:var(--accent)}
       <option value="360">Moderate</option>
       <option value="220" selected>Fast</option>
     </select>
+    <button id="smoothBtn" class="primary" title="Toggle smooth transitions during automatic playback" aria-pressed="true">Smooth On</button>
     <select id="hoursSel">
       <option value="1">1h</option>
       <option value="3">3h</option>
@@ -118,7 +119,7 @@ input[type=range]{width:min(26vw,340px);accent-color:var(--accent)}
 
 <script>
 (() => {
-  const HOST = 'https://ramsdis.cira.colostate.edu';
+  const HOST = 'https://url.au.m.mimecastprotect.com/s/4EMnCXLWj0uQw7pkI6fkfWFuOW?domain=ramsdis.cira.colostate.edu';
   const SECTOR = 'aus';
   const STEP_MINUTES = 10;
   const MAX_PROBE_EXTRA_HOURS = 4;
@@ -159,6 +160,10 @@ input[type=range]{width:min(26vw,340px);accent-color:var(--accent)}
   let lastLiveCheck = null;
   let latestKnownStamp = '';
   let lastProduct = '';
+  let transition = null;
+  let transitionRaf = null;
+  let drawGeneration = 0;
+  let smoothTransitions = true;
 
   function pad(n){ return String(n).padStart(2,'0'); }
   function cleanProductCode(v){ return String(v || '').trim().toLowerCase().replace(/[^a-z0-9_]/g, ''); }
@@ -238,7 +243,6 @@ input[type=range]{width:min(26vw,340px);accent-color:var(--accent)}
       canvas.height = h;
       canvas.style.width = window.innerWidth + 'px';
       canvas.style.height = window.innerHeight + 'px';
-      draw();
     }
   }
 
@@ -303,29 +307,96 @@ input[type=range]{width:min(26vw,340px);accent-color:var(--accent)}
     if (b) b.textContent = viewScale === 1 ? 'Reset View' : `${Math.round(viewScale * 100)}%`;
   }
 
-  async function draw(){
-    resizeCanvas();
+  function transitionDuration(){
+    // Keep the blend proportional to playback speed, while leaving a short
+    // fully-visible hold at slower speeds and remaining responsive when fast.
+    return Math.max(110, Math.min(700, Math.round(playMs * 0.78)));
+  }
+
+  function smoothStep(t){
+    t = Math.max(0, Math.min(1, t));
+    return t * t * (3 - 2 * t);
+  }
+
+  function drawImageLayer(img, alpha){
+    if (!img || alpha <= 0) return;
+    ctx.globalAlpha = alpha;
+    ctx.globalCompositeOperation = 'source-over';
+    drawContain(img);
+  }
+
+  function drawOverlayLayer(){
+    if (!overlays || !overlayImages.geo) return;
+    ctx.globalAlpha = 0.72;
+    ctx.globalCompositeOperation = 'screen';
+    drawContain(overlayImages.geo);
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = 'source-over';
+  }
+
+  function clearCanvas(){
+    ctx.globalAlpha = 1;
     ctx.globalCompositeOperation = 'source-over';
     ctx.fillStyle = '#000';
     ctx.fillRect(0,0,canvas.width,canvas.height);
+  }
 
-    if (!frames.length) return;
+  async function draw(now = performance.now()){
+    resizeCanvas();
+    const generation = ++drawGeneration;
+
+    if (!frames.length) {
+      clearCanvas();
+      return;
+    }
+
+    if (transition) {
+      const active = transition;
+      const fromFrame = frames[active.fromIdx];
+      const toFrame = frames[active.toIdx];
+      if (!fromFrame || !toFrame) {
+        transition = null;
+        return draw(now);
+      }
+
+      // Do not clear the visible canvas while either image is still decoding.
+      // Keeping the previous completed frame in place prevents black flashes.
+      const [fromImg, toImg] = await Promise.all([
+        loadImage(fromFrame.url),
+        loadImage(toFrame.url)
+      ]);
+      if (generation !== drawGeneration || transition !== active) return;
+      if (!fromImg || !toImg) {
+        transition = null;
+        idx = active.toIdx;
+        return draw(now);
+      }
+
+      const progress = smoothStep((now - active.start) / active.duration);
+      clearCanvas();
+      drawImageLayer(fromImg, 1);
+      drawImageLayer(toImg, progress);
+      drawOverlayLayer();
+
+      if (progress < 1) {
+        transitionRaf = requestAnimationFrame(draw);
+      } else {
+        idx = active.toIdx;
+        transition = null;
+        transitionRaf = null;
+        updateLabels();
+        preloadAround(idx);
+      }
+      return;
+    }
 
     const f = frames[idx];
     const img = await loadImage(f.url);
-    if (!img) return;
+    if (generation !== drawGeneration || !img) return;
 
-    ctx.globalAlpha = 1;
-    ctx.globalCompositeOperation = 'source-over';
-    drawContain(img);
-
-    if (overlays) {
-      ctx.globalAlpha = 0.72;
-      ctx.globalCompositeOperation = 'screen';
-      drawContain(overlayImages.geo);
-      ctx.globalAlpha = 1;
-      ctx.globalCompositeOperation = 'source-over';
-    }
+    clearCanvas();
+    drawImageLayer(img, 1);
+    drawOverlayLayer();
   }
 
   function preloadAround(center){
@@ -519,17 +590,78 @@ input[type=range]{width:min(26vw,340px);accent-color:var(--accent)}
     scrub.value = String(idx);
   }
 
-  function showFrame(i){
+  async function showFrame(i, animate = false){
     if (!frames.length) return;
-    idx = ((i % frames.length) + frames.length) % frames.length;
+    const targetIdx = ((i % frames.length) + frames.length) % frames.length;
+
+    if (!animate || targetIdx === idx || !frames[idx]) {
+      if (transitionRaf) cancelAnimationFrame(transitionRaf);
+      transitionRaf = null;
+      transition = null;
+      idx = targetIdx;
+      updateLabels();
+      await loadImage(frames[idx].url);
+      draw();
+      preloadAround(idx);
+      return;
+    }
+
+    let fromIdx = idx;
+    if (transition) {
+      const elapsed = performance.now() - transition.start;
+      fromIdx = elapsed >= transition.duration / 2 ? transition.toIdx : transition.fromIdx;
+      idx = fromIdx;
+    }
+
+    // Decode both endpoints before beginning the timed blend. Until then, the
+    // last fully rendered frame remains untouched on the canvas.
+    const [fromImg, toImg] = await Promise.all([
+      loadImage(frames[fromIdx].url),
+      loadImage(frames[targetIdx].url)
+    ]);
+    if (!fromImg || !toImg) return;
+
+    if (transitionRaf) cancelAnimationFrame(transitionRaf);
+    transitionRaf = null;
+    transition = {
+      fromIdx,
+      toIdx: targetIdx,
+      start: performance.now(),
+      duration: transitionDuration()
+    };
+
+    const previousIdx = idx;
+    idx = targetIdx;
     updateLabels();
-    draw();
-    preloadAround(idx);
+    idx = previousIdx;
+
+    draw(transition.start);
   }
 
   function step(){
     if (!playing || !frames.length) return;
-    showFrame(idx + 1);
+    showFrame(idx + 1, smoothTransitions);
+  }
+
+  function setSmoothTransitions(v){
+    smoothTransitions = Boolean(v);
+    const button = document.getElementById('smoothBtn');
+    button.textContent = smoothTransitions ? 'Smooth On' : 'Smooth Off';
+    button.classList.toggle('primary', smoothTransitions);
+    button.setAttribute('aria-pressed', String(smoothTransitions));
+
+    // If smoothing is disabled during a blend, finish immediately on the
+    // destination frame rather than leaving a partially blended image visible.
+    if (!smoothTransitions && transition) {
+      const targetIdx = transition.toIdx;
+      if (transitionRaf) cancelAnimationFrame(transitionRaf);
+      transitionRaf = null;
+      transition = null;
+      idx = targetIdx;
+      updateLabels();
+      draw();
+      preloadAround(idx);
+    }
   }
 
   function restartTimer(){
@@ -568,6 +700,9 @@ input[type=range]{width:min(26vw,340px);accent-color:var(--accent)}
   }
 
   function resetAndScan(){
+    if (transitionRaf) cancelAnimationFrame(transitionRaf);
+    transitionRaf = null;
+    transition = null;
     imageCache = new Map();
     frames = [];
     idx = 0;
@@ -581,9 +716,10 @@ input[type=range]{width:min(26vw,340px);accent-color:var(--accent)}
   customProduct.onkeydown = e => { if (e.key === 'Enter') resetAndScan(); };
 
   document.getElementById('playBtn').onclick = () => setPlaying(!playing);
-  document.getElementById('backBtn').onclick = () => { setPlaying(false); showFrame(idx - 1); };
-  document.getElementById('nextBtn').onclick = () => { setPlaying(false); showFrame(idx + 1); };
+  document.getElementById('backBtn').onclick = () => { setPlaying(false); showFrame(idx - 1, false); };
+  document.getElementById('nextBtn').onclick = () => { setPlaying(false); showFrame(idx + 1, false); };
   document.getElementById('speedSel').onchange = e => { playMs = Number(e.target.value); restartTimer(); };
+  document.getElementById('smoothBtn').onclick = () => setSmoothTransitions(!smoothTransitions);
   document.getElementById('hoursSel').onchange = resetAndScan;
   document.getElementById('zoomOutBtn').onclick = () => zoomAt(window.innerWidth / 2, window.innerHeight / 2, 1 / 1.25);
   document.getElementById('zoomInBtn').onclick = () => zoomAt(window.innerWidth / 2, window.innerHeight / 2, 1.25);
@@ -591,13 +727,13 @@ input[type=range]{width:min(26vw,340px);accent-color:var(--accent)}
   document.getElementById('overlayBtn').onclick = () => setOverlays(!overlays);
   document.getElementById('refreshBtn').onclick = liveCheck;
   document.getElementById('fullBtn').onclick = () => document.documentElement.requestFullscreen?.();
-  scrub.oninput = e => { setPlaying(false); showFrame(Number(e.target.value)); };
+  scrub.oninput = e => { setPlaying(false); showFrame(Number(e.target.value), false); };
 
   document.addEventListener('keydown', e => {
     const k = e.key.toLowerCase();
     if (k === ' ') { e.preventDefault(); setPlaying(!playing); }
-    if (k === 'arrowleft') { setPlaying(false); showFrame(idx-1); }
-    if (k === 'arrowright') { setPlaying(false); showFrame(idx+1); }
+    if (k === 'arrowleft') { setPlaying(false); showFrame(idx-1, false); }
+    if (k === 'arrowright') { setPlaying(false); showFrame(idx+1, false); }
     if (k === 'f') document.documentElement.requestFullscreen?.();
     if (k === 'o') setOverlays(!overlays);
     if (k === 'r') liveCheck();
@@ -656,6 +792,7 @@ input[type=range]{width:min(26vw,340px);accent-color:var(--accent)}
 
   initProductFromUrl();
   setOverlays(true);
+  setSmoothTransitions(true);
   restartTimer();
   restartLiveTimer();
   wakeUi();
@@ -667,3 +804,4 @@ input[type=range]{width:min(26vw,340px);accent-color:var(--accent)}
 </script>
 </body>
 </html>
+
